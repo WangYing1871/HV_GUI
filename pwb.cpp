@@ -4,6 +4,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <iomanip>
+#include <fstream>
 #include "pwb.h"
 #include "util.h"
 
@@ -20,7 +21,9 @@ pwb::pwb(QWidget* p):
   QWidget(p){
   ui.setupUi(this);
 
-  this->setWindowTitle("高压板");
+  read_config();
+  for(auto&& x : m_monitor_value) x=0.;
+  this->setWindowTitle("PWB");
 
   m_timers.insert(std::make_pair("monitor",new QTimer));
   m_timers.insert(std::make_pair("dispatach",new QTimer));
@@ -48,7 +51,7 @@ pwb::pwb(QWidget* p):
   connect(ui.pushButton_10,&QAbstractButton::clicked,this,&pwb::reload_serialports);
   for (auto&& x : m_axis){
     if (x.first.find('x')!=std::string::npos) x.second->setRange(0,100);
-    if (x.first.find('y')!=std::string::npos) x.second->setRange(0,1);
+    if (x.first.find('y')!=std::string::npos) x.second->setRange(0,2000);
   }
 }
 
@@ -92,7 +95,7 @@ void pwb::init_switch(){
   connect(ui.pushButton_8,&QAbstractButton::clicked,this,&pwb::update);
   syn_slider();
 
-  
+
 }
 void pwb::log(size_t mode,std::string const& value){
     auto* active = ui.textBrowser_3;
@@ -101,16 +104,17 @@ void pwb::log(size_t mode,std::string const& value){
         mode==2 ?  util::info_to<QTextBrowser,util::log_mode::k_error>(active,value) :
         util::info_to<QTextBrowser,util::log_mode::k_error>(active,"unknow content mode, display as ERROR!");
 }
-#define syn_s_l(slider,lineedit)                                                    \
-  slider->setMinimum(0), slider->setMaximum(0xFFFF);                                \
-  slider->setPageStep(0xFFFF/32);                                                   \
-  connect(slider,&QSlider::valueChanged                                             \
-      ,[&,this](){lineedit->setText(util::u162hexstr(slider->value()).c_str());});  \
-  connect(lineedit,&QLineEdit::editingFinished                                      \
-      ,[&,this](){                                                                  \
-      uint16_t v = util::hexstr2u16(lineedit->text().toStdString().c_str());        \
-      if (v != slider->value()) slider->setValue(v); });                            \
+
+#define syn_s_l(slider,lineedit)                                                      \
+  slider->setMinimum(0), slider->setMaximum(2000);                                    \
+  slider->setPageStep(50);                                                            \
+  connect(slider,&QSlider::valueChanged                                               \
+      ,[&,this](){lineedit->setText(std::to_string(slider->value()).c_str());});      \
+  connect(lineedit,&QLineEdit::editingFinished                                        \
+      ,[&,this](){ float value = std::stof(lineedit->text().toStdString().c_str());   \
+        if (value != slider->value()) slider->setValue(value); });                    \
 /**/
+
 
 void pwb::syn_slider(){
   syn_s_l(ui.horizontalSlider,ui.lineEdit_12);
@@ -120,30 +124,32 @@ void pwb::syn_slider(){
 #undef syn_s_l
 
 void pwb::update(){
+  if (!_is_connect){
+    log(2,"link first please"); return; }
   Monitor();
   dispatach();
-  ui.horizontalSlider->setValue(m_data_frame.data[PWB_REG_SVV_CH0]);
-  ui.horizontalSlider_2->setValue(m_data_frame.data[PWB_REG_SVV_CH1]);
-  ui.horizontalSlider_3->setValue(m_data_frame.data[PWB_REG_SVV_CH2]);
-  ui.horizontalSlider_4->setValue(m_data_frame.data[PWB_REG_SVV_CH3]);
+  ui.horizontalSlider->setValue(2000.*m_data_frame.data[PWB_REG_SVV_CH0]/0xFFFF);
+  ui.horizontalSlider_2->setValue(2000.*m_data_frame.data[PWB_REG_SVV_CH1]/0xFFFF);
+  ui.horizontalSlider_3->setValue(2000.*m_data_frame.data[PWB_REG_SVV_CH2]/0xFFFF);
+  ui.horizontalSlider_4->setValue(2000.*m_data_frame.data[PWB_REG_SVV_CH3]/0xFFFF);
 }
 
 
 #define function_register_switch(name,index)            \
-void pwb::name(bool v){                              \
-  auto* md_ctx = m_modbus_context;  					\
+void pwb::name(bool v){                                 \
+  auto* md_ctx = m_modbus_context;  					          \
   int ec = modbus_write_bit(md_ctx,index,v);            \
   if (ec != 1){                                         \
     std::stringstream sstr;                             \
     sstr<<"channel "<<(index-4)<<" switch to "<<v<<     \
       " Failed";                                        \
-    log(1,sstr.str());                					\
+    log(1,sstr.str());                					        \
     m_switch_buttons[index-4]->switch_to(               \
         !m_switch_buttons[index-4]->state());           \
     return; }                                           \
   std::stringstream sstr;                               \
   sstr<<"channel "<<(index-4)<<" switch to "<<v<<" Ok"; \
-  log(0,sstr.str()); }                					\
+  log(0,sstr.str()); }                					        \
 /**/
 function_register_switch(switch_channel0,4)
 function_register_switch(switch_channel1,5)
@@ -152,20 +158,26 @@ function_register_switch(switch_channel3,7)
 #undef function_register_switch
 
 
-#define function_register_set(index,name,from,to,REG)                         \
-void pwb::name(){                                                          \
-  std::stringstream sstr(ui.from->text().toStdString().c_str());              \
-  uint16_t value; sstr>>std::hex>>value>>std::dec;                            \
-  if (m_caches[index]-value != 0) ui.to->setPageStep(value-m_caches[index]);  \
-  m_caches[index] = value;                                                    \
-  if (!sstr.fail()){                                                          \
-    auto* md_ctx = m_modbus_context;                          				  \
-    int ec = modbus_write_register(md_ctx,REG,value);                         \
-    if (ec != 1){ log(1,"set channel value Failed"); return; }                \
-    std::stringstream sstr; sstr<<#name<<" to value "<<value<<" Ok";          \
-    log(0,sstr.str());                                                        \
-  }else{ std::stringstream sstr;                                              \
-    log(1,"please input grammar as 'hex'(0x0000-0xFFFF)"); } }                \
+//  if (m_caches[index]-value != 0) ui.to->setPageStep(value-m_caches[index]);
+//  m_caches[index] = value;
+
+#define function_register_set(index,name,from,to,REG)                 \
+void pwb::name(){                                                     \
+  std::stringstream sstr(ui.from->text().toStdString().c_str());      \
+  float value; sstr>>std::hex>>value>>std::dec;                       \
+  if (!sstr.fail()){                                                  \
+    if (value<0 || value>2000){                                       \
+      log(1,"please input grammar as 'float'(0.-2000.)");             \
+      return;                                                         \
+    }                                                                 \
+    auto* md_ctx = m_modbus_context;                          				\
+    uint16_t input_value = (value/2000.)*0xFFFF;                      \
+    int ec = modbus_write_register(md_ctx,REG,input_value);           \
+    if (ec != 1){ log(1,"set channel value Failed"); return; }        \
+    std::stringstream sstr; sstr<<#name<<" to value "<<value<<" Ok";  \
+    log(0,sstr.str());                                                \
+  }else{ std::stringstream sstr;                                      \
+    log(1,"please input grammar as 'float'(0.-2000.)"); } }           \
 /**/
 function_register_set(0,set_channel0,lineEdit_12,horizontalSlider,PWB_REG_SVV_CH0)
 function_register_set(1,set_channel1,lineEdit_13,horizontalSlider_2,PWB_REG_SVV_CH1)
@@ -189,7 +201,7 @@ void pwb::Monitor(){
 void pwb::start(){
   m_timers["monitor"]->start();
   m_timers["dispatach"]->start();
-  
+
 }
 void pwb::syn_pv(){
   std::lock_guard<std::mutex> lock(m_mutex);
@@ -204,9 +216,6 @@ void pwb::stop(){
   m_timers["dispatach"]->stop();
 }
 void pwb::dispatach(){
-    for(int i=0; i<4; ++i){
-        std::cout<<std::hex<<m_data_frame.data[PWB_REG_BOARD_UUID+i]<<std::dec<<std::endl;
-    }
   uint32_t uuid = 0;
   meta::encode(uuid,util::b2i_indx
       ,m_data_frame.data[PWB_REG_BOARD_UUID]
@@ -242,14 +251,24 @@ void pwb::dispatach(){
   ui.lineEdit_10->setText(QString::number(
         util::get_bmp280_1(m_data_frame.data+PWB_REG_HUMIDITY_INT)));
 
-  ui.lineEdit  ->setText(util::u162hexstr(m_data_frame.data[PWB_REG_PVI_CH0]).c_str());
-  ui.lineEdit_4->setText(util::u162hexstr(m_data_frame.data[PWB_REG_PVI_CH1]).c_str());
-  ui.lineEdit_5->setText(util::u162hexstr(m_data_frame.data[PWB_REG_PVI_CH2]).c_str());
-  ui.lineEdit_7->setText(util::u162hexstr(m_data_frame.data[PWB_REG_PVI_CH3]).c_str());
-  ui.lineEdit_2->setText(util::u162hexstr(m_data_frame.data[PWB_REG_PVV_CH0]).c_str());
-  ui.lineEdit_3->setText(util::u162hexstr(m_data_frame.data[PWB_REG_PVV_CH1]).c_str());
-  ui.lineEdit_6->setText(util::u162hexstr(m_data_frame.data[PWB_REG_PVV_CH2]).c_str());
-  ui.lineEdit_8->setText(util::u162hexstr(m_data_frame.data[PWB_REG_PVV_CH3]).c_str());
+  //ui.lineEdit  ->setText(util::u162hexstr(m_data_frame.data[PWB_REG_PVI_CH0]).c_str());
+  
+  //((float)m_data_frame.data[PWB_REG_PVI_CH0]/0xFFFF)*get_k(0)/0xFFFF;
+
+  //ui.lineEdit_4->setText(util::u162hexstr(m_data_frame.data[PWB_REG_PVI_CH1]).c_str());
+  //ui.lineEdit_5->setText(util::u162hexstr(m_data_frame.data[PWB_REG_PVI_CH2]).c_str());
+  //ui.lineEdit_7->setText(util::u162hexstr(m_data_frame.data[PWB_REG_PVI_CH3]).c_str());
+  m_monitor_value[0] = 5.*get_v(m_data_frame.data[PWB_REG_PVV_CH0],0);
+  m_monitor_value[1] = 5.*get_v(m_data_frame.data[PWB_REG_PVV_CH1],1);
+  m_monitor_value[2] = 5.*get_v(m_data_frame.data[PWB_REG_PVV_CH2],2);
+  m_monitor_value[3] = 5.*get_v(m_data_frame.data[PWB_REG_PVV_CH3],3);
+  
+  ui.lineEdit_2->setText(std::to_string(m_monitor_value[0]).c_str());
+  ui.lineEdit_3->setText(std::to_string(m_monitor_value[1]).c_str());
+  ui.lineEdit_6->setText(std::to_string(m_monitor_value[2]).c_str());
+  ui.lineEdit_8->setText(std::to_string(m_monitor_value[3]).c_str());
+
+
 
   emit draw_signal(m_index++);
 }
@@ -352,28 +371,24 @@ void pwb::init_canvas(){
   m_series["c2_li"]->setPen(QColor(m_axis["c2_yi"]->linePenColor()));
   m_series["c3_li"]->setPen(QColor(m_axis["c3_yi"]->linePenColor()));
 
-  
+
 
   connect(this,SIGNAL(draw_signal(float)),
       this,SLOT(draw(float)));
 }
 void pwb::draw(float x){
-  m_series["c0_lv"]->append(x,m_data_frame.data[PWB_REG_PVV_CH0]/65536.);
-  m_series["c1_lv"]->append(x,m_data_frame.data[PWB_REG_PVV_CH1]/65536.);
-
-  ////double tmpi = m_data_frame.data[PWB_REG_PVI_CH0]*1334.3/1.93
-  ////  - m_data_frame.data[PWB_REG_PVV_CH0]*882.19/6.12;
-  ////debug_out(tmpi);
-  m_series["c2_lv"]->append(x,m_data_frame.data[PWB_REG_PVV_CH2]/65536.);
-  m_series["c3_lv"]->append(x,m_data_frame.data[PWB_REG_PVV_CH3]/65536.);
-  m_series["c0_li"]->append(x,m_data_frame.data[PWB_REG_PVI_CH0]/65536.);
-  m_series["c1_li"]->append(x,m_data_frame.data[PWB_REG_PVI_CH1]/65536.);
-  m_series["c2_li"]->append(x,m_data_frame.data[PWB_REG_PVI_CH2]/65536.);
-  m_series["c3_li"]->append(x,m_data_frame.data[PWB_REG_PVI_CH3]/65536.);
+  m_series["c0_lv"]->append(x,m_monitor_value[0]);
+  m_series["c1_lv"]->append(x,m_monitor_value[1]);
+  m_series["c2_lv"]->append(x,m_monitor_value[2]);
+  m_series["c3_lv"]->append(x,m_monitor_value[3]);
+  m_series["c0_li"]->append(x,m_monitor_value[4]);
+  m_series["c1_li"]->append(x,m_monitor_value[5]);
+  m_series["c2_li"]->append(x,m_monitor_value[6]);
+  m_series["c3_li"]->append(x,m_monitor_value[7]);
 
   auto const& adjust_axis_range = [&x](QValueAxis* axis){
     auto size = axis->max()-axis->min();
-    if (x>(size*0.8+axis->min())) 
+    if (x>(size*0.8+axis->min()))
       axis->setRange(axis->min()+0.2*size,axis->max()+0.2*size); };
   for (auto&& [x,y] : m_axis)
     if (x.find('x')!=std::string::npos) adjust_axis_range(y); }
@@ -430,3 +445,44 @@ void pwb::ConnectModbus(){
       _is_connect = false;
   }
 }
+
+void pwb::read_config(){
+  std::ifstream fin("config.txt");
+
+  std::vector<float> y;
+  std::vector<std::vector<float>> x;
+
+  std::string str;
+  size_t index=0;
+  while(!fin.eof()){
+    std::getline(fin,str);
+    if (str.size()==0) continue;
+    std::stringstream sstr(str.c_str());
+    std::vector<float> buf(15);
+    for (int i=0; i<15; ++i) sstr>>buf.at(i);
+    if (index==0) y = buf;
+    else x.emplace_back(buf);
+    index++;
+  }
+  for (size_t i=0; i<4; ++i){
+    if (i==0){
+      m_kb[i] = util::least_squart_line_fit(std::begin(x[i])
+          //,std::end(x[i]),std::begin(y),std::end(y));
+          ,std::begin(x[i])+7,std::begin(y),std::begin(y)+7);
+      std::cout<<std::dec;
+    }else{
+      m_kb[i] = util::least_squart_line_fit(std::begin(x[i])
+          ,std::end(x[i]),std::begin(y),std::end(y));
+    }
+  }
+  fin.close();
+}
+
+double pwb::get_v(uint16_t value, size_t index) const{
+  double value_f = (double)value/0xFFFF;
+  if (m_kb.find(index) != m_kb.end())
+    return 2000.*(m_kb.at(index).first*value_f+m_kb.at(index).second)/(0xFFFF);
+  return 0.;
+}
+
+//double pwb::get_i()

@@ -154,6 +154,23 @@ std::string state_ss(bool v);
 
 std::vector<std::string> get_ports_name();
 
+template <class _iterx, class _itery>
+std::pair<double,double> least_squart_line_fit(
+    _iterx first, _iterx last, _itery yfirst, _itery ylast){
+  auto cd = std::min(std::distance(first,last),std::distance(yfirst,ylast));
+  auto const& ave = []<class _tp>(_tp f, _tp l)->double{
+    return std::accumulate(f,l,0.)/std::distance(f,l); };
+  double ave_x = ave(first,last);
+  double ave_y = ave(yfirst,ylast);
+  double sum_xy=0., sum_xx=0.;
+  for (size_t i=0; i<(size_t)cd; ++i) sum_xy += *first++**yfirst++;
+  std::advance(first,-cd);
+  for (size_t i=0; i<(size_t)cd; ++i) sum_xx += *first**first++;
+  std::pair<double,double> rt;
+  rt.first = (sum_xy-cd*ave_x*ave_y)/(sum_xx-cd*ave_x*ave_x);
+  rt.second = ave_y-rt.first*ave_x;
+  return rt;
+}
 
 }
 

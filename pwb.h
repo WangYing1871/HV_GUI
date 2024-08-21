@@ -57,6 +57,8 @@ private:
   std::unordered_map<std::string,QValueAxis*> m_axis;
   modbus_t* m_modbus_ctx;
 
+  std::map<int,std::pair<double,double>> m_kb;
+
   QTimer m_timer;
 
   void dispatach();
@@ -64,6 +66,7 @@ private:
   void Monitor();
   void syn_pv();
   void syn_slider();
+  void read_config();
 
   void init_canvas();
   uint16_t m_caches[4];
@@ -74,6 +77,10 @@ private:
   void log(size_t mode,std::string const& value);
   bool _is_connect = false;
   modbus_t* m_modbus_context;
+  double m_monitor_value[8];
+
+  double get_v(uint16_t,size_t) const;
+ // double get_i(uint16_t,size_t) const;
 
 
 private:
@@ -97,11 +104,13 @@ public slots:
   void ConnectModbus();
   void reload_serialports();
 
+
 signals:
   void draw_signal(float);
 
 private:
   static int const s_tolerate_failed;
+
  
 };
 
