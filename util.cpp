@@ -190,4 +190,15 @@ uint16_t hexstr2u16(std::string const& v){
     uint16_t rt{}; sstr>>std::hex>>rt;
     return !sstr.fail() ? rt : 0; }
 
+void trim_space(std::string& s){
+  for (auto iter = s.begin(); iter != s.end(); ++iter)
+    if (*iter != ' ' && *iter != '\t')
+      for(auto riter = s.rbegin(); riter != s.rend(); ++riter)
+        if (*riter!= ' ' && *riter!='\t'){
+          s = s.substr(
+              std::distance(s.begin(),iter)
+              ,std::distance(riter,s.rend())-std::distance(s.begin(),iter)
+              ); return; }
+  s.clear(); }
+
 }

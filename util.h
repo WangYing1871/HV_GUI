@@ -14,6 +14,7 @@
 #include <climits>
 #include <mutex>
 #include <chrono>
+#include <iomanip>
 
 #include <QColor>
 #include <QTextEdit>
@@ -22,6 +23,26 @@
 
 #include "modbus.h"
 namespace util{
+void trim_space(std::string&);
+
+template <class _tp>
+std::vector<_tp> str_to_values(std::string const& x){
+  std::vector<_tp> store;
+  std::string xc = x;
+  trim_space(xc);
+  std::istringstream isstr(xc.c_str());
+  _tp begin; isstr>>begin;
+  if (isstr.fail()) return store;
+  store.emplace_back(begin);
+  while(!isstr.fail()) { isstr>>begin; if (!isstr.fail()) store.emplace_back(begin);}
+  return store;
+}
+
+template <class _tp>
+std::string float_str(_tp v, int fl){
+  std::ostringstream osstr; osstr<<std::setprecision(fl);
+  osstr<<std::to_string(fl).c_str();
+  return osstr.str(); }
 
 static std::mutex g_mutex;
 
@@ -43,33 +64,6 @@ enum class log_mode : size_t{ k_info = 0 ,k_warning ,k_error };
 std::string qlayout_sizeconstraint_name(QLayout::SizeConstraint);
 
 std::string format_time(std::chrono::system_clock::duration,double);
-
-
-std::string const item_names[] = {
-  "Mfc_rate_sv_LH, "
-  "Mfc_rate_sv_HI, "
-  "Mfc_rate_default_LH, "
-  "Mfc_rate_default_HI, "
-  "Mfc_rate_pv_LH, "
-  "Mfc_rate_pv_HI, "
-  "Pump_speed_sv, "
-  "Pump_speed_default, "
-  "Pump_speed_pv, "
-  "Pump_speed_min, "
-  "Pump_speed_max, "
-  "Temperature_dec, "
-  "Temperature_fra, "
-  "Pressure_dec, "
-  "Pressure_fra, "
-  "Set_mode, "
-  "Cur_mode, "
-  "Cur_status, "
-  "Flow_duration, "
-  "Recycle_duration, "
-  "Update_interval, "
-  "Reg_heartbeat_LH, "
-  "Reg_heartbeat_HI" };
-
 
 std::string rename(std::string const&);
 std::string pwd();
@@ -175,7 +169,7 @@ std::pair<double,double> least_squart_line_fit(
 }
 
 namespace util{
-static std::index_sequence<8,8,8,8> const b2i_indx;
+static std::index_sequence<16,16,16,16> const b2i_indx;
 static std::index_sequence<8,8> const b2u16_indx;
 static std::index_sequence<16,16> const u162u32_indx;
 namespace _meta{

@@ -7,6 +7,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <functional>
+#include <fstream>
 
 #include "QObject"
 #include "QWidget"
@@ -58,15 +59,17 @@ private:
   modbus_t* m_modbus_ctx;
 
   std::map<int,std::pair<double,double>> m_kb;
+  std::map<int,std::pair<double,double>> m_dac_kb;
 
   QTimer m_timer;
 
-  void dispatach();
+  void dispatch();
 
   void Monitor();
   void syn_pv();
   void syn_slider();
   void read_config();
+  void read_config1();
 
   void init_canvas();
   uint16_t m_caches[4];
@@ -78,6 +81,9 @@ private:
   bool _is_connect = false;
   modbus_t* m_modbus_context;
   double m_monitor_value[8];
+
+  std::string m_csv_name;
+  std::ofstream m_fout;
 
   double get_v(uint16_t,size_t) const;
  // double get_i(uint16_t,size_t) const;
@@ -103,6 +109,7 @@ public slots:
   void draw(float);
   void ConnectModbus();
   void reload_serialports();
+  void save_as();
 
 
 signals:

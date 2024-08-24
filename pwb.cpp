@@ -9,6 +9,7 @@
 #include "util.h"
 
 #include <QTime>
+#include <QFileDialog>
 //#include <QValueAxis>
 //#include <QChart>
 #include <QtCharts/QChartView>
@@ -22,19 +23,20 @@ pwb::pwb(QWidget* p):
   ui.setupUi(this);
 
   read_config();
+  read_config1();
   for(auto&& x : m_monitor_value) x=0.;
   this->setWindowTitle("PWB");
 
   m_timers.insert(std::make_pair("monitor",new QTimer));
-  m_timers.insert(std::make_pair("dispatach",new QTimer));
+  m_timers.insert(std::make_pair("dispatch",new QTimer));
   m_timers["monitor"]->setInterval(1000);
-  m_timers["dispatach"]->setInterval(1000);
+  m_timers["dispatch"]->setInterval(1000);
 
   connect(m_timers["monitor"],&QTimer::timeout,this,&pwb::Monitor);
-  connect(m_timers["dispatach"],&QTimer::timeout,this,&pwb::dispatach);
+  connect(m_timers["dispatch"],&QTimer::timeout,this,&pwb::dispatch);
 
   ui.lcdNumber->setDigitCount(8);
-  //ui.lcdNumber_2->setDigitCount(10);
+  ui.lcdNumber_2->setDigitCount(16);
 
   ui.lineEdit->setEnabled(false);
   ui.lineEdit_2->setEnabled(false);
@@ -44,6 +46,12 @@ pwb::pwb(QWidget* p):
   ui.lineEdit_6->setEnabled(false);
   ui.lineEdit_7->setEnabled(false);
   ui.lineEdit_8->setEnabled(false);
+  ui.lineEdit_9->setEnabled(false);
+  ui.lineEdit_10->setEnabled(false);
+  ui.lineEdit_19->setEnabled(false);
+  ui.lineEdit_20->setEnabled(false);
+  ui.lineEdit_21->setEnabled(false);
+  ui.lineEdit_22->setEnabled(false);
   init_switch();
   init_canvas();
 
@@ -86,6 +94,7 @@ void pwb::init_switch(){
   connect(ui.pushButton_5,&QAbstractButton::clicked,this,&pwb::start);
   connect(ui.pushButton_6,&QAbstractButton::clicked,this,&pwb::stop);
   connect(ui.pushButton_9,&QAbstractButton::clicked,this,&pwb::ConnectModbus);
+  connect(ui.pushButton_7,&QAbstractButton::clicked,this,&pwb::save_as);
 
   ui.checkBox->setEnabled(false); ui.checkBox_2->setEnabled(false);
   ui.checkBox_3->setEnabled(false); ui.checkBox_4->setEnabled(false);
@@ -127,7 +136,7 @@ void pwb::update(){
   if (!_is_connect){
     log(2,"link first please"); return; }
   Monitor();
-  dispatach();
+  dispatch();
   ui.horizontalSlider->setValue(2000.*m_data_frame.data[PWB_REG_SVV_CH0]/0xFFFF);
   ui.horizontalSlider_2->setValue(2000.*m_data_frame.data[PWB_REG_SVV_CH1]/0xFFFF);
   ui.horizontalSlider_3->setValue(2000.*m_data_frame.data[PWB_REG_SVV_CH2]/0xFFFF);
@@ -171,7 +180,7 @@ void pwb::name(){                                                     \
       return;                                                         \
     }                                                                 \
     auto* md_ctx = m_modbus_context;                          				\
-    uint16_t input_value = (value/2000.)*0xFFFF;                      \
+    uint16_t input_value = (value/2000.f)*0xFFFF;                     \
     int ec = modbus_write_register(md_ctx,REG,input_value);           \
     if (ec != 1){ log(1,"set channel value Failed"); return; }        \
     std::stringstream sstr; sstr<<#name<<" to value "<<value<<" Ok";  \
@@ -196,11 +205,24 @@ void pwb::Monitor(){
   lock.unlock();
   if (ec != PWB_COIL_END){ log(1,"PWB read coils failed"); return; } }
 
+void pwb::save_as(){
+  m_csv_name = util::time_to_str()+".csv";
+  QString path = QDir::currentPath() + "/" + QString(m_csv_name.c_str());
+  QString fileName = QFileDialog::getSaveFileName(this, tr("Save Data"),
+      path,tr("Csv Files (*.csv)"));
+  m_csv_name=fileName.toStdString();
+}
+
 
 
 void pwb::start(){
+  if (!m_fout.is_open()){
+    m_csv_name = m_csv_name=="" ? util::time_to_str() : m_csv_name;
+    m_csv_name+=".csv";
+    m_fout.open(m_csv_name.c_str());
+  }
   m_timers["monitor"]->start();
-  m_timers["dispatach"]->start();
+  m_timers["dispatch"]->start();
 
 }
 void pwb::syn_pv(){
@@ -212,18 +234,26 @@ void pwb::syn_pv(){
 }
 
 void pwb::stop(){
+  if (m_fout.is_open()) m_fout.flush();
   m_timers["monitor"]->stop();
-  m_timers["dispatach"]->stop();
+  m_timers["dispatch"]->stop();
 }
-void pwb::dispatach(){
-  uint32_t uuid = 0;
+void pwb::dispatch(){
+
+  if (m_fout.is_open()){
+    m_fout<<util::time_to_str()<<',';
+    for (int i=0; i<PWB_REG_END-1; ++i) m_fout<<m_data_frame.data[i]<<',';
+    m_fout<<m_data_frame.data[PWB_REG_END-1]<<std::endl; }
+
+
+  uint64_t uuid = 0;
   meta::encode(uuid,util::b2i_indx
       ,m_data_frame.data[PWB_REG_BOARD_UUID]
       ,m_data_frame.data[PWB_REG_BOARD_UUID+1]
       ,m_data_frame.data[PWB_REG_BOARD_UUID+2]
       ,m_data_frame.data[PWB_REG_BOARD_UUID+3]
       );
-  ui.lcdNumber_2->display((int)uuid);
+  ui.lcdNumber_2->display(QString{std::to_string(uuid).c_str()});
 
   uint32_t seconds = 0;
   meta::encode(seconds,util::u162u32_indx
@@ -267,10 +297,16 @@ void pwb::dispatach(){
   ui.lineEdit_3->setText(std::to_string(m_monitor_value[1]).c_str());
   ui.lineEdit_6->setText(std::to_string(m_monitor_value[2]).c_str());
   ui.lineEdit_8->setText(std::to_string(m_monitor_value[3]).c_str());
-
-
-
   emit draw_signal(m_index++);
+
+  float hv1 = (m_dac_kb[1].first*m_data_frame.data[PWB_REG_SVV_CH1]+m_dac_kb[1].second)/**400*/;
+  float hv3 = (m_dac_kb[3].first*m_data_frame.data[PWB_REG_SVV_CH3]+m_dac_kb[3].second)/**400*/;
+
+  //float hv2 = (m_dac_kb[2].first*m_data_frame.data[PWB_REG_SVV_CH0]+m_dac_kb[0].second)*400;
+
+  //ui.lineEdit_19->setText(std::to_string(hv0).c_str());
+  ui.lineEdit_20->setText(std::to_string(hv1).c_str());
+  ui.lineEdit_22->setText(std::to_string(hv3).c_str());
 }
 
 void pwb::abort(){
@@ -397,6 +433,8 @@ void pwb::closeEvent(QCloseEvent* event){
   Q_UNUSED(event);
   for (auto&& [_,y] : m_timers)
     if (y->isActive()) y->stop();
+  m_fout.flush();
+  m_fout.close();
 }
 
 void pwb::ConnectModbus(){
@@ -448,6 +486,7 @@ void pwb::ConnectModbus(){
 
 void pwb::read_config(){
   std::ifstream fin("config.txt");
+  if(!fin.is_open()) return;
 
   std::vector<float> y;
   std::vector<std::vector<float>> x;
@@ -476,6 +515,36 @@ void pwb::read_config(){
     }
   }
   fin.close();
+}
+
+void pwb::read_config1(){
+  std::ifstream fin("config_hv.txt");
+  if(!fin.is_open()) return;
+  std::string sbuf;
+  auto const& read_xy = [&]()->std::pair<double,double>{
+    std::getline(fin,sbuf);
+    auto x = util::str_to_values<uint32_t>(sbuf);
+    std::getline(fin,sbuf);
+    auto y = util::str_to_values<float>(sbuf);
+    return util::least_squart_line_fit(
+          std::begin(x),std::end(x),std::begin(y),std::end(y));
+  };
+  while(!fin.eof()){
+    std::getline(fin,sbuf);
+    util::trim_space(sbuf);
+    if (sbuf=="#DC0"){
+    }else if(sbuf=="#DC1"){
+      m_dac_kb[1]=read_xy();
+    }else if(sbuf=="#DC2"){
+    }else if(sbuf=="#DC3"){
+      m_dac_kb[3]=read_xy();
+    }
+
+  }
+
+
+
+
 }
 
 double pwb::get_v(uint16_t value, size_t index) const{
