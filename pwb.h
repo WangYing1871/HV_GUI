@@ -20,6 +20,8 @@
 QT_CHARTS_USE_NAMESPACE
 #endif
 
+#include <QtMqtt/QMqttClient>
+
 #include "switch.h"
 #include "ui_pwb.h"
 #include "modbus_pwb_ifc.h"
@@ -52,6 +54,7 @@ public:
   void modbus_context(modbus_t* value) {m_modbus_ctx = value;}
 
 private:
+  QMqttClient* m_client;
   std::map<int,SwitchButton*> m_switch_buttons;
   std::map<std::string,QTimer*> m_timers;
   std::unordered_map<std::string,QLineSeries*> m_series;
@@ -60,6 +63,7 @@ private:
 
   std::map<int,std::pair<double,double>> m_kb;
   std::map<int,std::pair<double,double>> m_dac_kb;
+  std::map<int,std::pair<double,double>> m_adc_kb;
 
   QTimer m_timer;
 
@@ -103,6 +107,10 @@ public slots:
   void set_channel1();
   void set_channel2();
   void set_channel3();
+  void set_channel0_hex();
+  void set_channel1_hex();
+  void set_channel2_hex();
+  void set_channel3_hex();
   void start();
   void stop();
   void update();
@@ -110,6 +118,11 @@ public slots:
   void ConnectModbus();
   void reload_serialports();
   void save_as();
+  void syn_tab(int);
+  void connect_mqtt();
+  void disconnect_mqtt();
+  void publish();
+  void subscribe();
 
 
 signals:

@@ -1,4 +1,4 @@
-QT += core gui serialport charts widgets mqtt
+QT += core gui serialport charts widgets network
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 win32: { CONFIG += c++20 }
 unix: {QMAKE_CXXFLAGS +=           \
@@ -7,6 +7,8 @@ unix: {QMAKE_CXXFLAGS +=           \
   -DD_develop                      \
   -Wno-deprecated-enum-enum-conversion 
 }
+
+
 
 SOURCES += \
     main.cpp \
@@ -32,3 +34,4 @@ HEADERS += \
     util.h
 FORMS += pwb.ui
 win32: {LIBS += -lws2_32 -lsetupapi}
+win32:CONFIG(release, debug|release): LIBS += -L$$PWD/lib/ -lQt6Mqtt

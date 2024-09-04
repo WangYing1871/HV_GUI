@@ -12,10 +12,15 @@ class SwitchButton : public QWidget
 {
     Q_OBJECT
 public:
+    typedef SwitchButton self_t;
+    typedef QWidget base_t;
     explicit SwitchButton(QWidget *parent = nullptr);
 
     void switch_to(bool);
   inline bool state() const {return m_checked;}
+    void set_friend(self_t* f) {if(f==this) return; m_friend=f;f->set_friend(this);}
+    self_t*& get_friend() {return m_friend;}
+    void remove_friend() {m_friend->get_friend()=nullptr; m_friend=nullptr;}
 
 signals:
     void statusChanged(bool checked);
@@ -35,6 +40,7 @@ protected:
 
 
 private:
+    self_t* m_friend;
     int m_space;
     int m_radius;
     bool m_checked;

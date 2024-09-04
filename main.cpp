@@ -1,7 +1,9 @@
 
 #include <QApplication>
+#include <iostream>
+#include <stdio.h>
 #include "pwb.h"
-
+#include <QtMqtt/QMqttClient>
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);

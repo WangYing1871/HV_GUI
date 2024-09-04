@@ -2,19 +2,19 @@
 #include <sstream>
 #include <cfloat>
 #include <cmath>
-#include <stdexcept>
-#include <iomanip>
 #include <fstream>
 #include "pwb.h"
 #include "util.h"
 
 #include <QTime>
 #include <QFileDialog>
+#include <QtWidgets/QMessageBox>
 //#include <QValueAxis>
 //#include <QChart>
 #include <QtCharts/QChartView>
 #include <QtCharts/QValueAxis>
 #include <QGraphicsLayout>
+#include <QtMqtt/QMqttClient>
 
 int const pwb::s_tolerate_failed = 10;
 
@@ -36,7 +36,6 @@ pwb::pwb(QWidget* p):
   connect(m_timers["dispatch"],&QTimer::timeout,this,&pwb::dispatch);
 
   ui.lcdNumber->setDigitCount(8);
-  ui.lcdNumber_2->setDigitCount(16);
 
   ui.lineEdit->setEnabled(false);
   ui.lineEdit_2->setEnabled(false);
@@ -48,19 +47,24 @@ pwb::pwb(QWidget* p):
   ui.lineEdit_8->setEnabled(false);
   ui.lineEdit_9->setEnabled(false);
   ui.lineEdit_10->setEnabled(false);
-  ui.lineEdit_19->setEnabled(false);
-  ui.lineEdit_20->setEnabled(false);
-  ui.lineEdit_21->setEnabled(false);
-  ui.lineEdit_22->setEnabled(false);
   init_switch();
   init_canvas();
 
   reload_serialports();
   connect(ui.pushButton_10,&QAbstractButton::clicked,this,&pwb::reload_serialports);
+
   for (auto&& x : m_axis){
     if (x.first.find('x')!=std::string::npos) x.second->setRange(0,100);
     if (x.first.find('y')!=std::string::npos) x.second->setRange(0,2000);
   }
+  m_client = new QMqttClient(this);
+  m_client->setHostname(ui.lineEdit_19->text());
+  m_client->setPort(static_cast<quint16>(ui.spinBox_2->value()));
+  connect(ui.lineEdit_19,&QLineEdit::textChanged,m_client,&QMqttClient::setHostname);
+  connect(ui.pushButton_11,&QAbstractButton::clicked,this,&pwb::connect_mqtt);
+  connect(ui.pushButton_12,&QAbstractButton::clicked,this,&pwb::subscribe);
+  connect(ui.pushButton_13,&QAbstractButton::clicked,this,&pwb::publish);
+
 }
 
 void pwb::reload_serialports(){
@@ -80,26 +84,51 @@ void pwb::init_switch(){
   connect(sbt2,SIGNAL(statusChanged(bool)),this,SLOT(switch_channel2(bool)));
   auto* sbt3 = new SwitchButton(ui.widget_2);
   connect(sbt3,SIGNAL(statusChanged(bool)),this,SLOT(switch_channel3(bool)));
+  auto* sbt4 = new SwitchButton(ui.widget_9);
+  connect(sbt4,SIGNAL(statusChanged(bool)),this,SLOT(switch_channel0(bool)));
+  auto* sbt5 = new SwitchButton(ui.widget_10);
+  connect(sbt5,SIGNAL(statusChanged(bool)),this,SLOT(switch_channel1(bool)));
+  auto* sbt6 = new SwitchButton(ui.widget_11);
+  connect(sbt6,SIGNAL(statusChanged(bool)),this,SLOT(switch_channel2(bool)));
+  auto* sbt7 = new SwitchButton(ui.widget_12);
+  connect(sbt7,SIGNAL(statusChanged(bool)),this,SLOT(switch_channel3(bool)));
   m_switch_buttons.insert(std::make_pair(0,sbt0));
   m_switch_buttons.insert(std::make_pair(1,sbt1));
   m_switch_buttons.insert(std::make_pair(2,sbt2));
   m_switch_buttons.insert(std::make_pair(3,sbt3));
-  for (auto&& [_,x] : m_switch_buttons ) x->setGeometry(0,0,69,25);
+  m_switch_buttons.insert(std::make_pair(4,sbt4));
+  m_switch_buttons.insert(std::make_pair(5,sbt5));
+  m_switch_buttons.insert(std::make_pair(6,sbt6));
+  m_switch_buttons.insert(std::make_pair(7,sbt7));
+  //：wsbt0->set_friend(sbt4);
+  for (auto&& [_,x] : m_switch_buttons ) x->setGeometry(0,0,49,20);
 
   connect(ui.pushButton,&QAbstractButton::clicked,this,&pwb::set_channel0);
   connect(ui.pushButton_2,&QAbstractButton::clicked,this,&pwb::set_channel1);
   connect(ui.pushButton_3,&QAbstractButton::clicked,this,&pwb::set_channel2);
   connect(ui.pushButton_4,&QAbstractButton::clicked,this,&pwb::set_channel3);
 
+  connect(ui.pushButton_15,&QAbstractButton::clicked,this,&pwb::set_channel0_hex);
+  connect(ui.pushButton_17,&QAbstractButton::clicked,this,&pwb::set_channel1_hex);
+  connect(ui.pushButton_18,&QAbstractButton::clicked,this,&pwb::set_channel2_hex);
+  connect(ui.pushButton_16,&QAbstractButton::clicked,this,&pwb::set_channel3_hex);
+
   connect(ui.pushButton_5,&QAbstractButton::clicked,this,&pwb::start);
   connect(ui.pushButton_6,&QAbstractButton::clicked,this,&pwb::stop);
   connect(ui.pushButton_9,&QAbstractButton::clicked,this,&pwb::ConnectModbus);
   connect(ui.pushButton_7,&QAbstractButton::clicked,this,&pwb::save_as);
 
+  connect(ui.tabWidget,SIGNAL(currentChanged(int)),this,SLOT(syn_tab(int)));
+
   ui.checkBox->setEnabled(false); ui.checkBox_2->setEnabled(false);
   ui.checkBox_3->setEnabled(false); ui.checkBox_4->setEnabled(false);
   ui.lineEdit_15->setEnabled(false); ui.lineEdit_16->setEnabled(false);
   ui.lineEdit_17->setEnabled(false); ui.lineEdit_18->setEnabled(false);
+  ui.lineEdit_21->setEnabled(false); ui.lineEdit_22->setEnabled(false);
+  ui.lineEdit_27->setEnabled(false); ui.lineEdit_28->setEnabled(false);
+  ui.lineEdit_33->setEnabled(false); ui.lineEdit_34->setEnabled(false);
+  ui.lineEdit_29->setEnabled(false); ui.lineEdit_30->setEnabled(false);
+
 
   connect(ui.pushButton_8,&QAbstractButton::clicked,this,&pwb::update);
   syn_slider();
@@ -123,14 +152,29 @@ void pwb::log(size_t mode,std::string const& value){
       ,[&,this](){ float value = std::stof(lineedit->text().toStdString().c_str());   \
         if (value != slider->value()) slider->setValue(value); });                    \
 /**/
+#define syn_s_l1(slider,lineedit)                                                      \
+  slider->setMinimum(0), slider->setMaximum(0xFFFF);                                    \
+  slider->setPageStep(0xFFFF/64);                                                            \
+  connect(slider,&QSlider::valueChanged                                               \
+      ,[&,this](){lineedit->setText(util::u162hexstr(slider->value()).c_str());});      \
+  connect(lineedit,&QLineEdit::editingFinished                                        \
+      ,[&,this](){ uint16_t value = util::hexstr2u16(lineedit->text().toStdString().c_str());   \
+        if (value != slider->value()) slider->setValue(value); });                    \
+/**/
 
 
 void pwb::syn_slider(){
   syn_s_l(ui.horizontalSlider,ui.lineEdit_12);
   syn_s_l(ui.horizontalSlider_2,ui.lineEdit_13);
   syn_s_l(ui.horizontalSlider_3,ui.lineEdit_14);
-  syn_s_l(ui.horizontalSlider_4,ui.lineEdit_11); }
+  syn_s_l(ui.horizontalSlider_4,ui.lineEdit_11);
+  syn_s_l1(ui.horizontalSlider_9,ui.lineEdit_25);
+  syn_s_l1(ui.horizontalSlider_10,ui.lineEdit_23);
+  syn_s_l1(ui.horizontalSlider_11,ui.lineEdit_26);
+  syn_s_l1(ui.horizontalSlider_12,ui.lineEdit_24);
+}
 #undef syn_s_l
+#undef syn_s_l1
 
 void pwb::update(){
   if (!_is_connect){
@@ -141,24 +185,31 @@ void pwb::update(){
   ui.horizontalSlider_2->setValue(2000.*m_data_frame.data[PWB_REG_SVV_CH1]/0xFFFF);
   ui.horizontalSlider_3->setValue(2000.*m_data_frame.data[PWB_REG_SVV_CH2]/0xFFFF);
   ui.horizontalSlider_4->setValue(2000.*m_data_frame.data[PWB_REG_SVV_CH3]/0xFFFF);
+  ui.horizontalSlider_9->setValue(m_data_frame.data[PWB_REG_SVV_CH0]);
+  ui.horizontalSlider_10->setValue(m_data_frame.data[PWB_REG_SVV_CH1]);
+  ui.horizontalSlider_11->setValue(m_data_frame.data[PWB_REG_SVV_CH2]);
+  ui.horizontalSlider_12->setValue(m_data_frame.data[PWB_REG_SVV_CH3]);
 }
 
 
 #define function_register_switch(name,index)            \
 void pwb::name(bool v){                                 \
-  auto* md_ctx = m_modbus_context;  					          \
+  if(!_is_connect){ log(2,"link first please"); return;}\
+  auto* md_ctx = m_modbus_context;  					\
   int ec = modbus_write_bit(md_ctx,index,v);            \
   if (ec != 1){                                         \
     std::stringstream sstr;                             \
     sstr<<"channel "<<(index-4)<<" switch to "<<v<<     \
       " Failed";                                        \
-    log(1,sstr.str());                					        \
+    log(1,sstr.str());                					\
     m_switch_buttons[index-4]->switch_to(               \
         !m_switch_buttons[index-4]->state());           \
+    m_switch_buttons[index]->switch_to(               \
+        !m_switch_buttons[index]->state());           \
     return; }                                           \
   std::stringstream sstr;                               \
   sstr<<"channel "<<(index-4)<<" switch to "<<v<<" Ok"; \
-  log(0,sstr.str()); }                					        \
+  log(0,sstr.str()); }                					\
 /**/
 function_register_switch(switch_channel0,4)
 function_register_switch(switch_channel1,5)
@@ -166,33 +217,53 @@ function_register_switch(switch_channel2,6)
 function_register_switch(switch_channel3,7)
 #undef function_register_switch
 
-
-//  if (m_caches[index]-value != 0) ui.to->setPageStep(value-m_caches[index]);
-//  m_caches[index] = value;
-
-#define function_register_set(index,name,from,to,REG)                 \
+#define function_register_set(index,name,from,REG)                    \
 void pwb::name(){                                                     \
   std::stringstream sstr(ui.from->text().toStdString().c_str());      \
-  float value; sstr>>std::hex>>value>>std::dec;                       \
+  float value; sstr>>std::dec>>value;                                 \
   if (!sstr.fail()){                                                  \
     if (value<0 || value>2000){                                       \
       log(1,"please input grammar as 'float'(0.-2000.)");             \
       return;                                                         \
     }                                                                 \
-    auto* md_ctx = m_modbus_context;                          				\
+    auto* md_ctx = m_modbus_context;                            	  \
     uint16_t input_value = (value/2000.f)*0xFFFF;                     \
     int ec = modbus_write_register(md_ctx,REG,input_value);           \
     if (ec != 1){ log(1,"set channel value Failed"); return; }        \
-    std::stringstream sstr; sstr<<#name<<" to value "<<value<<" Ok";  \
+    std::stringstream sstr; sstr<<#name<<" to value "<<value<<" ok";  \
     log(0,sstr.str());                                                \
   }else{ std::stringstream sstr;                                      \
-    log(1,"please input grammar as 'float'(0.-2000.)"); } }           \
+   log(1,"please input grammar as 'float'(0.-2000.)"); } }           \
 /**/
-function_register_set(0,set_channel0,lineEdit_12,horizontalSlider,PWB_REG_SVV_CH0)
-function_register_set(1,set_channel1,lineEdit_13,horizontalSlider_2,PWB_REG_SVV_CH1)
-function_register_set(2,set_channel2,lineEdit_14,horizontalSlider_3,PWB_REG_SVV_CH2)
-function_register_set(3,set_channel3,lineEdit_11,horizontalSlider_4,PWB_REG_SVV_CH3)
+function_register_set(0,set_channel0,lineEdit_12,PWB_REG_SVV_CH0)
+function_register_set(1,set_channel1,lineEdit_13,PWB_REG_SVV_CH1)
+function_register_set(2,set_channel2,lineEdit_14,PWB_REG_SVV_CH2)
+function_register_set(3,set_channel3,lineEdit_11,PWB_REG_SVV_CH3)
 #undef function_register_set
+
+#define function_register_set_hex(index,name,from,REG)               \
+void pwb::name(){                                                  \
+  std::stringstream sstr(ui.from->text().toStdString().c_str());     \
+  uint16_t value; sstr>>std::hex>>value>>std::dec;                   \
+  if (!sstr.fail()){                                                 \
+    if (value<0x0 || value>0xFFFF){                                  \
+    log(1,"please input grammar as 'uint16_t'(0x0-0xFFFF)");       \
+    return;                                                        \
+  }                                                                \
+  auto* md_ctx = m_modbus_context;                            	   \
+  uint16_t input_value = value;                                    \
+  int ec = modbus_write_register(md_ctx,REG,input_value);          \
+  if (ec != 1){ log(1,"set channel value Failed"); return; }       \
+  std::stringstream sstr; sstr<<#name<<" to value "<<value<<" ok"; \
+  log(0,sstr.str());                                               \
+  }else{ std::stringstream sstr;                                     \
+    log(1,"please input grammar as 'uint16_t'(0x0-0xFFFF)"); }}      \
+/**/
+function_register_set_hex(0,set_channel0_hex,lineEdit_25,PWB_REG_SVV_CH0)
+function_register_set_hex(1,set_channel1_hex,lineEdit_23,PWB_REG_SVV_CH1)
+function_register_set_hex(2,set_channel2_hex,lineEdit_26,PWB_REG_SVV_CH2)
+function_register_set_hex(3,set_channel3_hex,lineEdit_24,PWB_REG_SVV_CH3)
+#undef function_register_set_hex
 
 
 void pwb::Monitor(){
@@ -231,12 +302,23 @@ void pwb::syn_pv(){
   m_switch_buttons[1]->switch_to(m_data_frame.device_coil[PWB_COIL_ONOFF_CH1]);
   m_switch_buttons[2]->switch_to(m_data_frame.device_coil[PWB_COIL_ONOFF_CH2]);
   m_switch_buttons[3]->switch_to(m_data_frame.device_coil[PWB_COIL_ONOFF_CH3]);
+  m_switch_buttons[4]->switch_to(m_data_frame.device_coil[PWB_COIL_ONOFF_CH0]);
+  m_switch_buttons[5]->switch_to(m_data_frame.device_coil[PWB_COIL_ONOFF_CH1]);
+  m_switch_buttons[6]->switch_to(m_data_frame.device_coil[PWB_COIL_ONOFF_CH2]);
+  m_switch_buttons[7]->switch_to(m_data_frame.device_coil[PWB_COIL_ONOFF_CH3]);
 }
 
 void pwb::stop(){
   if (m_fout.is_open()) m_fout.flush();
   m_timers["monitor"]->stop();
   m_timers["dispatch"]->stop();
+}
+
+void pwb::syn_tab(int index){
+    ui.tabWidget_2->setCurrentIndex(index);
+    ui.tabWidget_3->setCurrentIndex(index);
+    ui.tabWidget_4->setCurrentIndex(index);
+    ui.tabWidget_5->setCurrentIndex(index);
 }
 void pwb::dispatch(){
 
@@ -253,7 +335,9 @@ void pwb::dispatch(){
       ,m_data_frame.data[PWB_REG_BOARD_UUID+2]
       ,m_data_frame.data[PWB_REG_BOARD_UUID+3]
       );
-  ui.lcdNumber_2->display(QString{std::to_string(uuid).c_str()});
+  //ui.lcdNumber_2->display(QString{std::to_string(uuid).c_str()});
+  ui.lineEdit_35->setText(std::to_string(uuid).c_str());
+
 
   uint32_t seconds = 0;
   meta::encode(seconds,util::u162u32_indx
@@ -275,6 +359,15 @@ void pwb::dispatch(){
   ui.lineEdit_17->setText(util::u162hexstr(m_data_frame.data[PWB_REG_SVV_CH1]).c_str());
   ui.lineEdit_16->setText(util::u162hexstr(m_data_frame.data[PWB_REG_SVV_CH2]).c_str());
   ui.lineEdit_15->setText(util::u162hexstr(m_data_frame.data[PWB_REG_SVV_CH3]).c_str());
+  ui.lineEdit_21->setText(util::u162hexstr(m_data_frame.data[PWB_REG_PVV_CH0]).c_str());
+  ui.lineEdit_22->setText(util::u162hexstr(m_data_frame.data[PWB_REG_PVI_CH0]).c_str());
+  ui.lineEdit_27->setText(util::u162hexstr(m_data_frame.data[PWB_REG_PVV_CH1]).c_str());
+  ui.lineEdit_28->setText(util::u162hexstr(m_data_frame.data[PWB_REG_PVI_CH1]).c_str());
+  ui.lineEdit_33->setText(util::u162hexstr(m_data_frame.data[PWB_REG_PVV_CH2]).c_str());
+  ui.lineEdit_34->setText(util::u162hexstr(m_data_frame.data[PWB_REG_PVI_CH2]).c_str());
+  ui.lineEdit_29->setText(util::u162hexstr(m_data_frame.data[PWB_REG_PVV_CH3]).c_str());
+  ui.lineEdit_30->setText(util::u162hexstr(m_data_frame.data[PWB_REG_PVI_CH3]).c_str());
+
 
   ui.lineEdit_9->setText(QString::number(
         util::get_bmp280_1(m_data_frame.data+PWB_REG_TEMPERATURE_INT)));
@@ -288,25 +381,33 @@ void pwb::dispatch(){
   //ui.lineEdit_4->setText(util::u162hexstr(m_data_frame.data[PWB_REG_PVI_CH1]).c_str());
   //ui.lineEdit_5->setText(util::u162hexstr(m_data_frame.data[PWB_REG_PVI_CH2]).c_str());
   //ui.lineEdit_7->setText(util::u162hexstr(m_data_frame.data[PWB_REG_PVI_CH3]).c_str());
-  m_monitor_value[0] = 5.*get_v(m_data_frame.data[PWB_REG_PVV_CH0],0);
-  m_monitor_value[1] = 5.*get_v(m_data_frame.data[PWB_REG_PVV_CH1],1);
-  m_monitor_value[2] = 5.*get_v(m_data_frame.data[PWB_REG_PVV_CH2],2);
-  m_monitor_value[3] = 5.*get_v(m_data_frame.data[PWB_REG_PVV_CH3],3);
+  m_monitor_value[0] = m_adc_kb[0].first*m_data_frame.data[PWB_REG_PVV_CH0]+m_adc_kb[0].second;
+  m_monitor_value[1] = m_adc_kb[1].first*m_data_frame.data[PWB_REG_PVV_CH1]+m_adc_kb[1].second;
+  m_monitor_value[2] = m_adc_kb[2].first*m_data_frame.data[PWB_REG_PVV_CH2]+m_adc_kb[2].second;
+  m_monitor_value[3] = m_adc_kb[3].first*m_data_frame.data[PWB_REG_PVV_CH3]+m_adc_kb[3].second;
+  m_monitor_value[4] = 0;
+  m_monitor_value[5] = 0;
+  m_monitor_value[6] = 0;
+  m_monitor_value[7] = 0;
   
   ui.lineEdit_2->setText(std::to_string(m_monitor_value[0]).c_str());
   ui.lineEdit_3->setText(std::to_string(m_monitor_value[1]).c_str());
   ui.lineEdit_6->setText(std::to_string(m_monitor_value[2]).c_str());
   ui.lineEdit_8->setText(std::to_string(m_monitor_value[3]).c_str());
-  emit draw_signal(m_index++);
+  if (m_timers["monitor"]->isActive()) emit draw_signal(m_index++);
 
-  float hv1 = (m_dac_kb[1].first*m_data_frame.data[PWB_REG_SVV_CH1]+m_dac_kb[1].second)/**400*/;
-  float hv3 = (m_dac_kb[3].first*m_data_frame.data[PWB_REG_SVV_CH3]+m_dac_kb[3].second)/**400*/;
+  //float hv1 = (m_dac_kb[1].first*m_data_frame.data[PWB_REG_SVV_CH1]+m_dac_kb[1].second)/**400*/;
+  //float hv2 = (m_dac_kb[2].first*m_data_frame.data[PWB_REG_SVV_CH1]+m_dac_kb[2].second)/**400*/;
+  //float hv3 = (m_dac_kb[3].first*m_data_frame.data[PWB_REG_SVV_CH3]+m_dac_kb[3].second)/**400*/;
+  //float hv4 = (m_dac_kb[4].first*m_data_frame.data[PWB_REG_SVV_CH3]+m_dac_kb[4].second)/**400*/;
 
   //float hv2 = (m_dac_kb[2].first*m_data_frame.data[PWB_REG_SVV_CH0]+m_dac_kb[0].second)*400;
 
   //ui.lineEdit_19->setText(std::to_string(hv0).c_str());
-  ui.lineEdit_20->setText(std::to_string(hv1).c_str());
-  ui.lineEdit_22->setText(std::to_string(hv3).c_str());
+  //ui.lineEdit_20->setText(std::to_string(hv1).c_str());
+  //ui.lineEdit_21->setText(std::to_string(hv2).c_str());
+  //ui.lineEdit_22->setText(std::to_string(hv3).c_str());
+  //ui.lineEdit_23->setText(std::to_string(hv4).c_str());
 }
 
 void pwb::abort(){
@@ -458,15 +559,6 @@ void pwb::ConnectModbus(){
               ,"stop_bit: ",2
               ,"slave_addr: ",slave_addr
               );
-          //auto const& update_mcu = [&,this](){
-          //    int ec0 = modbus_read_registers(m_modbus_context,0,REG_END,m_data_frame.data);
-          //    int ec1 = modbus_read_bits(m_modbus_context,0,COIL_END,m_data_frame.device_coil);
-          //    if (ec0!=REG_END || ec1!=COIL_END){
-          //        log(2,"Update firmware status failed!"); return; }
-          //    update_mode();
-          //    update_forward();
-          //};
-          //update_mcu();
       }else{
           _is_connect = false;
           util::info_to<QTextBrowser,util::log_mode::k_error>(
@@ -532,19 +624,19 @@ void pwb::read_config1(){
   while(!fin.eof()){
     std::getline(fin,sbuf);
     util::trim_space(sbuf);
-    if (sbuf=="#DC0"){
-    }else if(sbuf=="#DC1"){
-      m_dac_kb[1]=read_xy();
-    }else if(sbuf=="#DC2"){
-    }else if(sbuf=="#DC3"){
-      m_dac_kb[3]=read_xy();
-    }
-
+    if (sbuf=="#DC0"){ m_dac_kb[0]=read_xy(); }
+    else if(sbuf=="#DC1"){ m_dac_kb[1]=read_xy(); }
+    else if(sbuf=="#DC2"){ m_dac_kb[2]=read_xy(); }
+    else if(sbuf=="#DC3"){ m_dac_kb[3]=read_xy(); }
+    else if(sbuf=="#AD0"){ m_adc_kb[0]=read_xy();}
+    else if(sbuf=="#AD1"){ m_adc_kb[1]=read_xy();}
+    else if(sbuf=="#AD2"){ m_adc_kb[2]=read_xy();}
+    else if(sbuf=="#AD3"){ m_adc_kb[3]=read_xy();}
   }
-
-
-
-
+  std::cout<<m_adc_kb[1].first<<std::endl;
+  std::cout<<m_adc_kb[1].second<<std::endl;
+  std::cout<<m_adc_kb[3].first<<std::endl;
+  std::cout<<m_adc_kb[3].second<<std::endl;
 }
 
 double pwb::get_v(uint16_t value, size_t index) const{
@@ -554,4 +646,36 @@ double pwb::get_v(uint16_t value, size_t index) const{
   return 0.;
 }
 
-//double pwb::get_i()
+void pwb::connect_mqtt(){
+  if(m_client->state()==QMqttClient::Disconnected){
+    ui.lineEdit_19->setEnabled(false);
+    ui.spinBox_2->setEnabled(false);
+    ui.pushButton_11->setText("disconnect");
+    m_client->connectToHost();
+  }else{
+    ui.lineEdit_19->setEnabled(true);
+    ui.spinBox_2->setEnabled(true);
+    ui.pushButton_11->setText("connect");
+    m_client->disconnectFromHost();
+  }
+
+}
+
+void pwb::disconnect_mqtt(){
+
+}
+
+void pwb::publish(){
+  if (m_client->publish(ui.lineEdit_31->text(),ui.lineEdit_32->text().toUtf8())==-1){
+    QMessageBox::critical(this,QLatin1String("error"),QLatin1String("Could not publish message"));
+  }
+
+}
+
+void pwb::subscribe(){
+    auto sub = m_client->subscribe(ui.lineEdit_31->text());
+    if (!sub){
+        QMessageBox::critical(this,QLatin1String("error"),QLatin1String("Could not subscribe. Is there a valid connect?"));
+    }
+
+}

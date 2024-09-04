@@ -21,8 +21,8 @@ SwitchButton::SwitchButton(QWidget *parent) : QWidget(parent)
 
     m_textColor = QColor(255, 255, 255);
 
-    m_textOn = "open";
-    m_textOff = "close";
+    m_textOn = "ON";
+    m_textOff = "OFF";
 
     m_step = 0;
     m_startX = 0;
@@ -105,6 +105,7 @@ void SwitchButton::paintEvent(QPaintEvent*) {
 void SwitchButton::mousePressEvent(QMouseEvent *ev)
 {
     Q_UNUSED(ev)
+    if (m_friend) m_friend->mousePressEvent(ev);
 
     m_checked = !m_checked;
     emit statusChanged(m_checked);
