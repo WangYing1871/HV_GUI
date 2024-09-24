@@ -1,8 +1,8 @@
 #ifndef util_H
-#define util_H 1 
+#define util_H 1
+#include <iostream>
 #define info_out(X) std::cout<<"==> "<<__LINE__<<" "<<#X<<" |"<<(X)<<"|\n"
 #define debug_out(X) std::cerr<<"==> "<<__LINE__<<" "<<#X<<" |"<<(X)<<"|\n"
-#include <iostream>
 #include <string>
 #include <tuple>
 #include <string>
@@ -27,6 +27,7 @@ void trim_space(std::string&);
 
 template <class _tp>
 std::vector<_tp> str_to_values(std::string const& x){
+  if(x.empty()) return {};
   std::vector<_tp> store;
   std::string xc = x;
   trim_space(xc);
@@ -34,7 +35,11 @@ std::vector<_tp> str_to_values(std::string const& x){
   _tp begin; isstr>>begin;
   if (isstr.fail()) return store;
   store.emplace_back(begin);
-  while(!isstr.fail()) { isstr>>begin; if (!isstr.fail()) store.emplace_back(begin);}
+  while(!isstr.fail()) {
+      isstr>>begin;
+      if (!isstr.fail())
+          store.emplace_back(begin);
+  }
   return store;
 }
 
@@ -52,12 +57,95 @@ struct modbus_parameters_t{
   int data_bit = 8;
   int stop_bit = 2; };
 
+static std::string const item_names[] = {
+    "time"
+    ,"run_time"
+    ,"temperature"
+    ,"humidity"
+    ,"set_v0"
+    ,"set_v1"
+    ,"set_v2"
+    ,"set_v3"
+    ,"v0"
+    ,"v1"
+    ,"v2"
+    ,"v3"
+    ,"i0"
+    ,"i1"
+    ,"i2"
+    ,"i3"
+};
+template <class _tp>
+std::string str_voltage(_tp value, std::string const& unit="V"){
+    std::stringstream sstr;
+    sstr<<std::fixed<<std::setprecision(2)<<value;
+    if (unit.empty()){
+      return sstr.str();
+    }
+    else if(unit=="V"){
+      sstr<<" V";
+      return sstr.str();
+    }else if(unit=="kV"){
+
+    }
+}
+template <class _tp>
+std::string str_current(_tp value, std::string const& unit="nA"){
+    std::stringstream sstr;
+    sstr<<std::fixed<<std::setprecision(2)<<value;
+    if (unit.empty()){
+      return sstr.str();
+    }
+    else if(unit=="nA"){
+      sstr<<" nA";
+      return sstr.str();
+    }else if(unit=="uA"){
+
+    }else if(unit=="mA"){
+
+    }else if(unit=="A"){
+
+    }
+}
+template <class _tp>
+std::string str_temperature(_tp value, std::string const& unit="°C"){
+    std::stringstream sstr;
+    sstr<<std::fixed<<std::setprecision(2)<<value;
+    if (unit.empty()){
+      return sstr.str();
+    }
+    else if(unit=="°C"){
+      sstr<<" °C";
+      return sstr.str();
+    }else if(unit=="°F"){
+    }else if(unit=="K"){
+    }
+    return "";
+}
+template <class _tp>
+std::string str_humlity(_tp value, std::string const& unit="%"){
+  std::stringstream sstr;
+  sstr<<std::fixed<<std::setprecision(2)<<value;
+  if (unit.empty()){
+    return sstr.str();
+  }
+  else if(unit=="%"){
+      sstr<<" %";
+        return sstr.str();
+    }
+    return "";
+}
+
 std::string uint2timestr(uint32_t);
 
-static const char blank_str[] = QT_TRANSLATE_NOOP("mainwindow", "N/A");
+static const char blank_str[] =
+    QT_TRANSLATE_NOOP("mainwindow", "N/A");
 
 static std::array<QColor,3> color_palette = { 
-  QColor{"#07B2FC"}, QColor{"#534F02"}, QColor{"#F80F05"} };
+  QColor{"#07B2FC"}
+  ,QColor{"#534F02"}
+  ,QColor{"#F80F05"}
+};
 
 enum class log_mode : size_t{ k_info = 0 ,k_warning ,k_error };
 
@@ -85,6 +173,7 @@ int64_t highrestime_ns();
 int64_t highrestime_ms();
 
 std::string time_to_str();
+std::string time_to_str_s();
 
 std::array<std::string,4> uint2_dhms(uint32_t);
 
@@ -108,17 +197,12 @@ void to_stream(_tp& os,args&&... params){
 
 template <class _tp=QTextEdit, log_mode _ev=log_mode::k_info,class... args>
 _tp* info_to(_tp* qtext, args&&... params){
-  if (qtext->document()->lineCount() >= 101) qtext->clear();
+  if (qtext->document()->lineCount() >= 501) qtext->clear();
   qtext->setTextColor(color_palette[(size_t)_ev]);
   std::stringstream sstr;
   to_stream(sstr
       ,_ev==log_mode::k_info ? "[INFO] " : _ev==log_mode::k_warning ? "[WARN] " : "[ERROR]"
-#ifdef WIN32
-      ,'[',util::highrestime_ns(),']'
-#else
-      ,util::timestamp()
-#endif
-      //,get_time()
+      ,'[',util::time_to_str(),']'
       ,std::forward<args>(params)...);
   {std::lock_guard<std::mutex> lock(g_mutex); qtext->append(QString{sstr.str().c_str()});}
   return qtext; }
@@ -139,6 +223,8 @@ inline void bit(_tp& v,uint8_t addr,bool s){
 
 template <std::integral _tp>
 inline void bit_ot(_tp& v, uint8_t addr){
+    //__atrribute__((unused(v)));
+    //__atrribute__((unused(addr)));
 }
 
 template <std::integral _tp>
@@ -152,6 +238,7 @@ template <class _iterx, class _itery>
 std::pair<double,double> least_squart_line_fit(
     _iterx first, _iterx last, _itery yfirst, _itery ylast){
   auto cd = std::min(std::distance(first,last),std::distance(yfirst,ylast));
+  if(cd==0) return std::make_pair(0.,0.);
   auto const& ave = []<class _tp>(_tp f, _tp l)->double{
     return std::accumulate(f,l,0.)/std::distance(f,l); };
   double ave_x = ave(first,last);
@@ -165,17 +252,20 @@ std::pair<double,double> least_squart_line_fit(
   rt.second = ave_y-rt.first*ave_x;
   return rt;
 }
-
+std::string get_local_ip4_address();
 }
 
 namespace util{
+
 static std::index_sequence<16,16,16,16> const b2i_indx;
 static std::index_sequence<8,8> const b2u16_indx;
 static std::index_sequence<16,16> const u162u32_indx;
 namespace _meta{
 
-template <class _tp, template <class, class...> class _cont_tt=std::vector
-  ,template <class...> class _tup_t=std::tuple, class... _args>
+template <class _tp
+  ,template <class, class...> class _cont_tt=std::vector
+  ,template <class...> class _tup_t=std::tuple
+  ,class... _args>
 _cont_tt<_tp> unpack(_tup_t<_args...> const& _p0){
   constexpr std::size_t NN = sizeof...(_args);
   _cont_tt<_tp> tmp(NN);
@@ -188,7 +278,10 @@ template <std::size_t N>
 struct size_{
   constexpr std::size_t static value = N; };
 
-template <std::size_t N, std::size_t M, std::size_t value_first, std::size_t... _values>
+template <std::size_t N
+  ,std::size_t M
+  ,std::size_t value_first
+  , std::size_t... _values>
 struct get_helper{
   constexpr std::size_t static value = get_helper<N,M+1,_values...>::value; };
 template <std::size_t N, std::size_t value_first, std::size_t... _values>
@@ -257,7 +350,5 @@ std::array<_up,sizeof...(_values)> decode(_tp const& _from, std::index_sequence<
   return tmp; }
 }
 }
-
 namespace meta = util::_meta;
-
 #endif

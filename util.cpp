@@ -10,7 +10,7 @@
 #include <stdexcept>
 #include <cmath>
 #include <ctime>
-#include <iomanip>
+#include <QNetworkInterface>
 namespace{
 auto const& format00 = [](std::size_t v)->std::string{
   return v<10 ? std::string("0")+std::to_string(v) : std::to_string(v); };
@@ -20,6 +20,14 @@ auto const& format01 = [](std::size_t v)->std::string{
 }
 
 namespace util{
+
+std::string get_local_ip4_address(){
+    auto ip_addresses = QNetworkInterface::allAddresses();
+    for (auto const& x : ip_addresses)
+      if(x!=QHostAddress::LocalHost && x.toIPv4Address())
+        return x.toString().toStdString();
+    return "";
+}
 
 std::string state_ss(bool v){ return  v ? "background: green;" : "background: red;";}
 
@@ -111,6 +119,17 @@ std::string time_to_str(){
   std::stringstream sstr;
   sstr<<1900 + ct.tm_year << "-"<<1+ ct.tm_mon << "-" << ct.tm_mday
     <<"_"<<format00(ct.tm_hour)<<"-"<<format00(ct.tm_min)<<"-"<<format00(ct.tm_sec)<<"_"<< msp%1000000;
+  return sstr.str(); }
+std::string time_to_str_s(){
+  using namespace std::chrono;
+  system_clock::time_point tp_now = system_clock::now();
+  system_clock::duration dsp = tp_now.time_since_epoch();
+  time_t msp = duration_cast<microseconds>(dsp).count();
+  time_t sse = msp/1000000;
+  std::tm ct = *std::localtime(&sse);
+  std::stringstream sstr;
+  sstr<<1900 + ct.tm_year << "-"<<1+ ct.tm_mon << "-" << ct.tm_mday
+       <<"-"<<format00(ct.tm_hour)<<":"<<format00(ct.tm_min)<<":"<<format00(ct.tm_sec);
   return sstr.str(); }
 
 std::string uint2timestr(uint32_t value){

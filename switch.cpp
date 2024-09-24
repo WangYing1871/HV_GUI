@@ -1,5 +1,5 @@
 #include "switch.h"
-#pragma execution_character_set("utf-8")
+//#pragma execution_character_set("utf-8")
 #include <QPainter>
 #include <iostream>
 #include <QPainterPath>
@@ -21,8 +21,8 @@ SwitchButton::SwitchButton(QWidget *parent) : QWidget(parent)
 
     m_textColor = QColor(255, 255, 255);
 
-    m_textOn = "open";
-    m_textOff = "close";
+    m_textOn = "ON";
+    m_textOff = "OFF";
 
     m_step = 0;
     m_startX = 0;
@@ -107,6 +107,7 @@ void SwitchButton::mousePressEvent(QMouseEvent *ev)
     Q_UNUSED(ev)
 
     m_checked = !m_checked;
+    if (m_friend) m_friend->switch_to(m_checked);
     emit statusChanged(m_checked);
 
     m_step = width() / 10;
