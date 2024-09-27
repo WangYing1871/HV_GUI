@@ -88,6 +88,7 @@ pwb::pwb(QWidget* p):
   reload_serialports();
   QObject::connect(ui.pushButton_10,&QAbstractButton::clicked,this,&pwb::reload_serialports);
 
+
   for (auto&& x : m_axis){
     if (x.first.find('x')!=std::string::npos) x.second->setRange(0,100);
     if (x.first.find('y')!=std::string::npos && x.first.find('v')!=std::string::npos) x.second->setRange(0,2000);
@@ -318,7 +319,7 @@ int pwb::set_v(float from, float to, QSpinBox* step_v,int index,size_t del){
       while(true){
         if(!m_set_v_flags[index].load()) { m_v_his[index]=from; return -4;}
         int step = step_v->value();
-        uint16_t target = std::round((from+step)/2000.*0xFFFF);
+        uint16_t target = std::round(((from+step)-m_dac_kb[index].second)/m_dac_kb[index].first);
         if((from+step)<to){
           //if (from+step<=0){
           //  std::unique_lock<std::mutex> lock(m_mutex);
@@ -338,7 +339,7 @@ int pwb::set_v(float from, float to, QSpinBox* step_v,int index,size_t del){
           QThread::msleep(del*0.98);
           continue;
         }else if((from+step)>=to){
-          uint16_t to_dac = std::round(to/2000.*0xFFFF);
+          uint16_t to_dac = std::round((to-m_dac_kb[index].second)/m_dac_kb[index].first);
           std::unique_lock<std::mutex> lock(m_mutex);
           int ec = modbus_write_register(m_modbus_context,index,to_dac);
           lock.unlock();
@@ -354,7 +355,7 @@ int pwb::set_v(float from, float to, QSpinBox* step_v,int index,size_t del){
       while(true){
         if(!m_set_v_flags[index].load()) { m_v_his[index]=from; return -4;}
         int step = step_v->value();
-        uint16_t target = std::round((from-step)/2000.*0xFFFF);
+        uint16_t target = std::round(((from-step)-m_dac_kb[index].second)/m_dac_kb[index].first);
         if((from-step)>to){
           //if (from+step>=2000.){
           //  std::unique_lock<std::mutex> lock(m_mutex);
@@ -374,7 +375,7 @@ int pwb::set_v(float from, float to, QSpinBox* step_v,int index,size_t del){
           QThread::msleep(del*0.98);
           continue;
         }else if((from-step)<=to){
-          uint16_t to_dac = std::round(to/2000.*0xFFFF);
+          uint16_t to_dac = std::round((to-m_dac_kb[index].second)/m_dac_kb[index].first);
           std::unique_lock<std::mutex> lock(m_mutex);
           int ec = modbus_write_register(m_modbus_context,index,to_dac);
           lock.unlock();
@@ -451,7 +452,7 @@ void pwb::name(){                                                               
   uint16_t value; sstr>>std::hex>>value;                                                 \
   if (sstr.fail() || (!sstr.fail() && (value<0x0 || value>0xFFFF))){                     \
     log(1,"please input grammar as 'uint16_t'(0x0-0xFFFF)");return;}                     \
-  float to = 2000.*value/0xFFFF;                                                         \
+  float to = value*m_dac_kb[index].first+m_dac_kb[index].second;                         \
   int idx = index;                                                                       \
   auto fun_binder =                                                                      \
       std::bind(&pwb::set_v,this                                                         \
@@ -580,10 +581,10 @@ void pwb::dispatch(){
     m_fout<<ts.toStdString()<<",";
     m_fout<<util::get_bmp280_1(m_data_frame.data+PWB_REG_TEMPERATURE_INT)<<",";
     m_fout<<util::get_bmp280_1(m_data_frame.data+PWB_REG_HUMIDITY_INT)<<",";
-    m_fout<<(m_data_frame.data[PWB_REG_SVV_CH0])/(float)0xFFFF*2000.<<",";
-    m_fout<<(m_data_frame.data[PWB_REG_SVV_CH1])/(float)0xFFFF*2000.<<",";
-    m_fout<<(m_data_frame.data[PWB_REG_SVV_CH2])/(float)0xFFFF*2000.<<",";
-    m_fout<<(m_data_frame.data[PWB_REG_SVV_CH3])/(float)0xFFFF*2000.<<",";
+    m_fout<<(m_data_frame.data[PWB_REG_SVV_CH0])*m_dac_kb[0].first+m_dac_kb[0].second<<",";
+    m_fout<<(m_data_frame.data[PWB_REG_SVV_CH1])*m_dac_kb[1].first+m_dac_kb[1].second<<",";
+    m_fout<<(m_data_frame.data[PWB_REG_SVV_CH2])*m_dac_kb[2].first+m_dac_kb[2].second<<",";
+    m_fout<<(m_data_frame.data[PWB_REG_SVV_CH3])*m_dac_kb[3].first+m_dac_kb[3].second<<",";
     for (auto&& x : m_monitor_value) m_fout<<x<<",";
     m_fout.flush()<<std::endl;
   }
@@ -840,7 +841,26 @@ void pwb::read_config1(){
   while(!fin.eof()){
     std::getline(fin,sbuf);
     util::trim_space(sbuf);
-    if (sbuf=="#DC0"){ m_dac_kb[0]=read_xy(m_config_table["DC0X"],m_config_table["DC0Y"]); }
+    if(sbuf=="#DC0"){
+      std::string buf(""); std::getline(fin,buf); std::stringstream sstr(buf.c_str());
+      sstr>>m_dac_kb[0].first>>m_dac_kb[0].second;
+      if (sstr.fail()) log(1,"read channel 0 DAC config failed");
+    }
+    else if (sbuf=="#DC1"){
+      std::string buf(""); std::getline(fin,buf); std::stringstream sstr(buf.c_str());
+      sstr>>m_dac_kb[1].first>>m_dac_kb[1].second;
+      if (sstr.fail()) log(1,"read channel 1 DAC config failed");
+    }
+    else if (sbuf=="#DC2"){
+      std::string buf(""); std::getline(fin,buf); std::stringstream sstr(buf.c_str());
+      sstr>>m_dac_kb[2].first>>m_dac_kb[2].second;
+      if (sstr.fail()) log(1,"read channel 2 DAC config failed");
+    }
+    else if (sbuf=="#DC3"){
+      std::string buf(""); std::getline(fin,buf); std::stringstream sstr(buf.c_str());
+      sstr>>m_dac_kb[3].first>>m_dac_kb[3].second;
+      if (sstr.fail()) log(1,"read channel 3 DAC config failed");
+    }
     else if(sbuf=="#DC1"){ m_dac_kb[1]=read_xy(m_config_table["DC1X"],m_config_table["DC1Y"]); }
     else if(sbuf=="#DC2"){ m_dac_kb[2]=read_xy(m_config_table["DC2X"],m_config_table["DC2Y"]); }
     else if(sbuf=="#DC3"){ m_dac_kb[3]=read_xy(m_config_table["DC3X"],m_config_table["DC3Y"]); }
@@ -868,6 +888,15 @@ void pwb::read_config1(){
     float ii = calibration_current(i,k,b);
     m_vi_rel[i] = {k,b,ii};
   }
+
+  //log(0,std::to_string(m_dac_kb[0].first));
+  //log(0,std::to_string(m_dac_kb[0].second));
+  //log(0,std::to_string(m_dac_kb[1].first));
+  //log(0,std::to_string(m_dac_kb[1].second));
+  //log(0,std::to_string(m_dac_kb[2].first));
+  //log(0,std::to_string(m_dac_kb[2].second));
+  //log(0,std::to_string(m_dac_kb[3].first));
+  //log(0,std::to_string(m_dac_kb[3].second));
 }
 
 float pwb::calibration_current(int cidx,float& k, float& b){
@@ -901,16 +930,6 @@ double pwb::get_v(uint16_t value, size_t index) const{
 }
 
 void pwb::connect_mqtt(){
-  //for (int i=0; i<24; ++i){
-  //  QColor color = ui.pushButton->palette().button().color();
-  //  color.setHsl(color.hue(),color.saturation(),i*10);
-  //  ui.pushButton->setPalette(QPalette(color));
-  //  ui.pushButton->update();
-  //  std::this_thread::sleep_for(std::chrono::milliseconds(200));
-  //  qDebug()<<"wangying";
-  //}
-
-
   if(m_mqtt_client->state()==QMqttClient::Disconnected){
     ui.lineEdit_19->setEnabled(false);
     ui.spinBox_2->setEnabled(false);
@@ -1004,22 +1023,6 @@ void pwb::to_bytes(){
     m_mqtt_pub.at("PWB/current/1")=QString{util::str_voltage(m_monitor_value[5],"").c_str()}.toUtf8();
     m_mqtt_pub.at("PWB/current/2")=QString{util::str_voltage(m_monitor_value[6],"").c_str()}.toUtf8();
     m_mqtt_pub.at("PWB/current/3")=QString{util::str_voltage(m_monitor_value[7],"").c_str()}.toUtf8();
-    //std::stringstream sstr;
-    //sstr<<"[T H V0 V1 V2 V3 I0 I1 I2 I3]=";
-    //sstr<<"["
-    //    <<util::str_temperature(util::get_bmp280_1(m_data_frame.data+PWB_REG_TEMPERATURE_INT),"°C").c_str()
-    //    <<" "<<util::str_humlity(util::get_bmp280_1(m_data_frame.data+PWB_REG_HUMIDITY_INT),"%").c_str()
-    //    <<" "<<util::str_voltage(m_monitor_value[0],"V")
-    //    <<" "<<util::str_voltage(m_monitor_value[1],"V")
-    //    <<" "<<util::str_voltage(m_monitor_value[2],"V")
-    //    <<" "<<util::str_voltage(m_monitor_value[3],"V")
-    //    <<" "<<util::str_current(m_monitor_value[4],"nA")
-    //    <<" "<<util::str_current(m_monitor_value[5],"nA")
-    //    <<" "<<util::str_current(m_monitor_value[6],"nA")
-    //    <<" "<<util::str_current(m_monitor_value[7],"nA")
-    //    <<"]"
-    //    ;
-    //return QString{sstr.str().c_str()}.toUtf8();
 }
 void pwb::keyPressEvent(QKeyEvent* key){
   if (key->key()==Qt::Key_C
